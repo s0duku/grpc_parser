@@ -15,7 +15,7 @@ python tool for decode the gRPC message body
 
 ## usage
 
-* you can simply run or import the library to your python code, or just use it as the Burp extension
+* you can simply run or import the library to your python code, or just use it as the BurpSuite extension
 
 ```
 python3 grpc_parser/parser.py YOU_GRPC_MESSAGE
