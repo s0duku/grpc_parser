@@ -6,7 +6,7 @@ from burp import IParameter
 from java.io import PrintWriter
 from java.lang import RuntimeException
 import json
-from grpc_parser.parser import ProtobufParser
+from grpc_parser.parser import ProtobufEncoder, ProtobufParser
 
 # https://github.com/PortSwigger/example-custom-editor-tab/blob/master/python/CustomEditorTab.py
 
@@ -51,7 +51,6 @@ class GrpcParserTab(IMessageEditorTab):
             header = self._extender._helpers.bytesToString(content[:offset])
             data = self._extender._helpers.bytesToString(content[offset:])
             try:
-                parser = ProtobufParser(data)
                 # parse the grpc
                 parser = ProtobufParser(data)
                 grpc = parser.parse_grpc()
@@ -74,9 +73,21 @@ class GrpcParserTab(IMessageEditorTab):
         # for now, not complete
 
         if self._txtInput.isTextModified():
-            # encode the data
             text = self._txtInput.getText()
-            return self._currentMessage
+            try:
+                info = self._extender._helpers.analyzeRequest(text)
+            except:
+                return self._currentMessage
+            offset = info.getBodyOffset()
+            header = self._extender._helpers.bytesToString(text[:offset])
+            data = self._extender._helpers.bytesToString(text[offset:])
+            # encode the data
+            grpc = json.loads(data)
+            try:
+                encoder = ProtobufEncoder(grpc)
+                return self._extender._helpers.stringToBytes(header+encoder.encode_grpc())
+            except:
+                return self._currentMessage
         else:
             return self._currentMessage
 

@@ -1,12 +1,27 @@
 
 # https://developers.google.com/protocol-buffers/docs/encoding#optional
 
+from os import stat_result
 import struct
 import subprocess
 import base64
 
 
 stack = 0
+
+def linux_base64_decode(payload):
+    # python base64 ..., only do once
+    res = b''
+    
+    while payload:
+        dbuf = base64.b64decode(payload)
+        res += dbuf
+        ebuf = base64.b64encode(dbuf)
+        payload = payload[len(ebuf.decode('latin')):]
+
+    return res
+
+
 
 class ProtobufParser:
     TYPE_VARINT = 0
@@ -151,21 +166,27 @@ class ProtobufParser:
                 raise
 
             # not sure this is right way for dealing repeated field
-            if msg.get(field_number) != None:
-                if isinstance(msg.get(field_number),list):
-                    msg[field_number].append(var)
+            new_field_key = '{}:{}'.format(field_number,wire_type)
+            if msg.get(new_field_key) != None:
+                if isinstance(msg.get(new_field_key),list):
+                    msg[new_field_key].append(var)
                 else:
-                    msg[field_number] = [msg[field_number]]
-                    msg[field_number].append(var)
+                    msg[new_field_key] = [msg[new_field_key]]
+                    msg[new_field_key].append(var)
             else:
-                msg[field_number] = var
+                msg[new_field_key] = var
 
         return msg
 
 
 
+
     def parse_grpc(self):
-        self.buffer = base64.b64decode(self.buffer.encode('latin')).decode('latin')
+        self.buffer = linux_base64_decode(self.buffer.encode('latin')).decode('latin')
+        
+        # with open('TMP','wb') as fd:
+        #     fd.write(self.buffer.encode('latin'))
+
         msgs = []
         res = {'trailer':''}
     
@@ -195,6 +216,137 @@ class ProtobufParser:
         res['msgs'] = msgs
 
         return res
+
+
+# https://github.com/fmoo/python-varint/blob/master/varint.py
+
+import sys
+
+if sys.version > '3':
+    def _byte(b):
+        return bytes((b, ))
+else:
+    def _byte(b):
+        return chr(b)
+
+class ProtobufEncoder:
+
+    def __init__(self,grpc):
+        self.grpc = grpc
+        self.buffer = ''
+
+    @staticmethod
+    def set_bit(bt,pos,value):
+        if pos < 1:
+            raise
+        if value:
+            # set 1
+            tmp = (1 << (pos - 1))
+            return bt | tmp
+        else:
+            # set 0
+            tmp = (1 << (pos - 1)) ^ 0xff
+            return bt & tmp
+
+    def encode_bytes(self,bt):
+        self.buffer += bt
+
+    @staticmethod
+    def marshal_varint(number):
+        buf = b''
+        while True:
+            towrite = number & 0x7f
+            number >>= 7
+            if number:
+                buf += _byte(towrite | 0x80)
+            else:
+                buf += _byte(towrite)
+                break
+        return buf.decode('latin')
+
+    
+    @staticmethod
+    def marshal_64bit(number):
+        return struct.pack('<Q',number).decode('latin')
+
+    @staticmethod
+    def marshal_32bit(number):
+        return struct.pack('<I',number).decode('latin')
+
+    def get_key(self):
+        var = self.get_varint()
+        field_number = var >> 3 # proto define field number
+        wire_type = var & (0x1 | 0x1<<1 | 0x1<<2)
+        return field_number,wire_type
+
+
+    @staticmethod
+    def marshal_key(field_number,wire_type):
+        key = ( field_number << 3 ) | wire_type
+        return ProtobufEncoder.marshal_varint(key)
+
+    @staticmethod
+    def marshal_length_delimited(msg):
+        if isinstance(msg,dict):
+            # for msg
+            buf = ProtobufEncoder.marshal_msg(msg)
+            length = len(buf)
+            return ProtobufEncoder.marshal_varint(length) + buf
+        else:
+            # for string/byte
+            length = len(msg)
+            return ProtobufEncoder.marshal_varint(length) + msg
+
+
+
+    @staticmethod
+    def marshal_msg(msg):
+        buf = ''
+
+        for field_key,value in msg.items():
+            field_number,wire_type = field_key.split(':')
+            field_number = int(field_number)
+            wire_type = int(wire_type)
+            key = ProtobufEncoder.marshal_key(field_number,wire_type)
+
+            buf += key
+
+            if wire_type == ProtobufParser.TYPE_32BIT:
+                buf += ProtobufEncoder.marshal_32bit(value)
+            elif wire_type == ProtobufParser.TYPE_64BIT:
+                buf += ProtobufEncoder.marshal_64bit(value)
+            elif wire_type == ProtobufParser.TYPE_VARINT:
+                buf += ProtobufEncoder.marshal_varint(value) 
+            elif wire_type == ProtobufParser.TYPE_LENGTH_DELIMITED:
+                buf += ProtobufEncoder.marshal_length_delimited(value)
+            else:
+                raise Exception("encoder wire type unknown")
+
+        return buf
+
+    def encode_grpc(self):
+        buf = ''
+        msgs = self.grpc['msgs']
+        trailer = self.grpc['trailer']
+
+        for msg in msgs:
+            buf += '\x00'
+            data = ProtobufEncoder.marshal_msg(msg)
+            length = len(data)
+            buf += struct.pack('>I',length).decode('latin')
+            buf += data
+
+        if trailer:
+            buf += '\x80'
+            buf += struct.pack('>I',len(trailer)).decode('latin')
+            buf += trailer
+
+        return base64.b64encode(buf.encode('latin')).decode('latin')
+            
+
+        
+
+
 
 
 
@@ -253,7 +405,17 @@ if __name__ == '__main__':
                 print('\n')
             print("gRPC Trailer:\n")
             print(grpc['trailer'])
-        except:
-            print("Parse Error, Sorry About the Dumb Code QAQ")
 
-    print("please give me some input")
+            try:
+                print("gRPC Test Encode Back:\n")
+                encoder = ProtobufEncoder(grpc)
+                res = encoder.encode_grpc()
+                print('\t',res)
+                print('\t',res==sys.argv[1],'\n')
+            except Exception as result:
+                print("Encoder Error, Sorry About the Dumb Code QAQ, Reason:",result)
+        except Exception as result:
+            print("Parse Error, Sorry About the Dumb Code QAQ, Reason:",result)
+
+    else:
+        print("please give me some input")
