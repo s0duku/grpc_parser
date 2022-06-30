@@ -3,7 +3,6 @@
 
 from os import stat_result
 import struct
-import subprocess
 import base64
 
 
@@ -11,15 +10,15 @@ stack = 0
 
 def linux_base64_decode(payload):
     # python base64 ..., only do once
-    res = b''
+    # res = b''
     
-    while payload:
-        dbuf = base64.b64decode(payload)
-        res += dbuf
-        ebuf = base64.b64encode(dbuf)
-        payload = payload[len(ebuf.decode('latin')):]
+    # while payload:
+    #     dbuf = base64.b64decode(payload)
+    #     res += dbuf
+    #     ebuf = base64.b64encode(dbuf)
+    #     payload = payload[len(ebuf.decode('latin')):]
 
-    return res
+    return base64.b64decode(payload)
 
 
 
